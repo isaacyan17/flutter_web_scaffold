@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart';
 
 class WebviewManger {
   static WebviewManger? _instance;
@@ -11,13 +13,9 @@ class WebviewManger {
   //  controller 键值对,
   final Map<String, dynamic> _webviewController = {};
 
-  String? createController({String? key}) {
-    if (_webviewController.length > 5) {
-      return null;
-    }
-
+  String createControllerKey({String? key}) {
     if (_webviewController.containsKey(key)) {
-      return key;
+      return key!;
     }
 
     WebViewController controller = WebViewController();
@@ -27,26 +25,52 @@ class WebviewManger {
     return key;
   }
 
-  Future createPreloadController({String? key, required String url}) async {
-    String? k = createController(key: key);
-    if (k == null) {
-      return null;
-    }
+  Future createPreloadController({
+    String? key,
+    required String url,
+    Map<String, dynamic>? cookies,
+    bool injectBridge = false,
+  }) async {
+    String k = createControllerKey(key: key);
 
     Completer completer = Completer();
 
     WebViewController controller = _webviewController[k] as WebViewController;
 
+    /// 设置cookie
+    if (cookies != null) {
+      WebViewCookieManager cookieManager = WebViewCookieManager();
+      for (var entry in cookies.entries) {
+        cookieManager.setCookie(
+            WebViewCookie(name: entry.key, value: entry.value, domain: url));
+      }
+    }
+
+    if (controller.platform is AndroidWebViewController) {
+      AndroidWebViewController.enableDebugging(true);
+    }
+
     controller.setJavaScriptMode(JavaScriptMode.unrestricted);
+    controller.addJavaScriptChannel('nativeBridge', onMessageReceived: (msg) {
+      print('>>>   nativeBridge: ${msg.message}');
+    });
+
     controller.setNavigationDelegate(NavigationDelegate(
       onProgress: (int progress) {
         print('WebView is loading (progress : $progress%)');
       },
-      onPageStarted: (String url) {
+      onPageStarted: (String url) async {
         print('Page started loading: $url');
       },
-      onPageFinished: (String url) {
+      onPageFinished: (String url) async{
         print('Page finished loading: $url');
+         /// 注入js
+        if (injectBridge) {
+          String jsAssets =
+              await rootBundle.loadString('packages/webview_scaffold/assets/jsBridgeHelper.js');
+
+          controller.runJavaScript(jsAssets);
+        }
         if (!completer.isCompleted) {
           completer.complete(k);
         }
@@ -66,7 +90,7 @@ class WebviewManger {
     return completer.future;
   }
 
-  WebViewController getController({required String key}) =>
+  WebViewController? getController({String? key}) =>
       _webviewController[key];
 
   void destroyController({required String key}) {
